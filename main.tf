@@ -145,7 +145,7 @@ module "db" {
     Environment = "dev"
   }
 
-  multi_az = true
+  multi_az = false
 
   # Backups are required in order to create a replica
   backup_retention_period = 0
@@ -178,23 +178,152 @@ module "db" {
 
 }
 
-/*
-sudo amazon-linux-extras install nginx1 -y
-sudo amazon-linux-extras install epel -y
-sudo amazon-linux-extras install php7.4 -y
-sudo systemctl start nginx
-sudo wget https://wordpress.org/wordpress-4.9.7.tar.gz
-sudo tar -zxvf wordpress-4.9.7.tar.gz -C /usr/share/nginx/html
-sudo chown -R nginx:nginx /usr/share/nginx/html/wordpress/
-sudo sed -i 's%/usr/share/nginx/html%/usr/share/nginx/html/wordpress%g' /etc/nginx/nginx.conf
-sudo systemctl restart nginx
+###########################################################################
+#
+# Create autoscaling group
+#
+###########################################################################
 
-cat<<EOF | sudo tee -a /usr/share/nginx/html/wordpress/wp-config.php
-define('DB_NAME', 'wordpress');
-define('DB_USER', 'root');
-define('DB_PASSWORD', 'root123');
-define('DB_HOST', 'localhost');
-EOF
+module "asg" {
+  source  = "terraform-aws-modules/autoscaling/aws"
+  version = "~> 4.0"
+
+  # Autoscaling group
+  name = "${var.project_name}-asg"
+
+  min_size                  = 0
+  max_size                  = 2
+  desired_capacity          = 1
+  wait_for_capacity_timeout = 0
+  health_check_type         = "EC2"
+  vpc_zone_identifier       = module.vpc.private_subnets
+
+  initial_lifecycle_hooks = [
+    {
+      name                  = "ExampleStartupLifeCycleHook"
+      default_result        = "CONTINUE"
+      heartbeat_timeout     = 60
+      lifecycle_transition  = "autoscaling:EC2_INSTANCE_LAUNCHING"
+      notification_metadata = jsonencode({ "hello" = "world" })
+    },
+    {
+      name                  = "ExampleTerminationLifeCycleHook"
+      default_result        = "CONTINUE"
+      heartbeat_timeout     = 180
+      lifecycle_transition  = "autoscaling:EC2_INSTANCE_TERMINATING"
+      notification_metadata = jsonencode({ "goodbye" = "world" })
+    }
+  ]
+
+  instance_refresh = {
+    strategy = "Rolling"
+    preferences = {
+      min_healthy_percentage = 50
+    }
+    triggers = ["tag"]
+  }
+
+  # Launch template
+  lt_name                = "${var.project_name}-asg"
+  description            = "Launch template example"
+  update_default_version = true
+
+  use_lt    = true
+  create_lt = true
+
+  image_id          = data.aws_ami.amz2.id
+  instance_type     = "t2.micro"
+  ebs_optimized     = false
+  enable_monitoring = false
+
+  block_device_mappings = [
+    {
+      # Root volume
+      device_name = "/dev/xvda"
+      no_device   = 0
+      ebs = {
+        delete_on_termination = true
+        encrypted             = true
+        volume_size           = 8
+        volume_type           = "gp2"
+      }
+    }
+  ]
+
+  capacity_reservation_specification = {
+    capacity_reservation_preference = "open"
+  }
+
+  metadata_options = {
+    http_endpoint               = "enabled"
+    http_tokens                 = "required"
+    http_put_response_hop_limit = 32
+  }
+
+  network_interfaces = [
+    {
+      delete_on_termination = true
+      description           = "eth0"
+      device_index          = 0
+      security_groups       = [module.sg_private.this_security_group_id]
+    }
+  ]
+
+  tags = [
+    {
+      key                 = "Environment"
+      value               = "dev"
+      propagate_at_launch = true
+    },
+    {
+      key                 = "Project"
+      value               = "wordpress"
+      propagate_at_launch = true
+    },
+  ]
+
+}
+
+/*
+https://support.huaweicloud.com/intl/en-us/bestpractice-ecs/en-us_topic_0135015337.html
+
+
+sudo wget http://nginx.org/packages/centos/7/noarch/RPMS/nginx-release-centos-7-0.el7.ngx.noarch.rpm
+sudo rpm -ivh nginx-release-centos-7-0.el7.ngx.noarch.rpm
+sudo yum -y install nginx
+sudo systemctl start nginx
+
+#sudo rpm -Uvh http://dev.mysql.com/get/mysql57-community-release-el7-8.noarch.rpm
+#sudo yum -y install mysql-community-server
+#sudo systemctl start mysqld
+#sudo grep 'temporary password' /var/log/mysqld.log
+#sudo mysql_secure_installation
+
+sudo rpm -Uvh https://mirror.webtatic.com/yum/el7/epel-release.rpm
+sudo rpm -Uvh https://mirror.webtatic.com/yum/el7/webtatic-release.rpm
+sudo yum -y install php70w-tidy php70w-common php70w-devel php70w-pdo php70w-mysql php70w-gd php70w-ldap php70w-mbstring php70w-mcrypt php70w-fpm
+sudo systemctl start php-fpm
+
+sudo sed -i 's%index  index.html index.htm%index  index.php index.html index.htm%g' /etc/nginx/conf.d/default.conf
+sudo sed -i '29,35 s/#//g' /etc/nginx/conf.d/default.conf
+sudo sed -i '33 s%/scripts$fastcgi_script_name;%/usr/share/nginx/html$fastcgi_script_name;%1' default.conf
+sudo service nginx reload
+
+
+CREATE DATABASE wordpress;
+GRANT ALL ON wordpress.* TO wordpressuser@localhost IDENTIFIED BY 'Wordpress@123';
+FLUSH PRIVILEGES;
+
+
+sudo wget https://wordpress.org/wordpress-4.9.8.tar.gz
+sudo tar -xvf wordpress-4.9.8.tar.gz -C /usr/share/nginx/html/
+sudo chmod -R 777 /usr/share/nginx/html/wordpress
+
+#testblog admin (t2dC$UAlcDTaO$RH@
+
+
+
+
 
 
 */
