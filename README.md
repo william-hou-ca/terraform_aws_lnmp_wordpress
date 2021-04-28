@@ -8,3 +8,4 @@
   6. Create a bastion instance in the public subnet.
   7. Create an application load balancer in the public subnet.
   
+  When you access the alb dns name, a simple web page will show. To access wordpress web site, please use the following address: http://alb_dns_name/wordpress/
